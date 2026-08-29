@@ -14,6 +14,8 @@ from datetime import date
 from pathlib import Path
 from typing import Literal
 
+from feasibility.money import mul_round_half_up
+
 EntryType = Literal["credit", "debit"]
 
 
@@ -172,8 +174,8 @@ def load_case(case_dir: str | Path) -> tuple[Client, Offer, CreditorRules]:
 
 
 def offer_total_cents(offer: Offer) -> int:
-    return round(offer.settlement_pct * offer.current_balance_cents)
+    return mul_round_half_up(offer.settlement_pct, offer.current_balance_cents)
 
 
 def program_fee_cents(offer: Offer, rules: CreditorRules) -> int:
-    return round(rules.program_fee_pct * offer.original_balance_cents)
+    return mul_round_half_up(rules.program_fee_pct, offer.original_balance_cents)

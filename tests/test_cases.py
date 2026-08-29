@@ -13,25 +13,31 @@ from datetime import date
 import pytest
 
 from feasibility.engine import evaluate_offer
-from feasibility.models import load_case
+from feasibility.models import load_case, offer_total_cents, program_fee_cents
+from feasibility.validate import schedule_is_valid
+from feasibility.cadence import cadence_through_horizon
 
 
 def _run(case: str):
     client, offer, rules = load_case(f"cases/{case}")
-    return evaluate_offer(client, offer, rules)
+    return client, offer, rules, evaluate_offer(client, offer, rules)
 
 
 def test_case1_feasible_even():
-    r = _run("case1_feasible_even")
+    client, offer, rules, r = _run("case1_feasible_even")
     assert r.feasible is True
     assert r.pay_shape_used == "even"
     assert r.schedule is not None
     # balance must never go negative
     assert all(row.balance_cents >= 0 for row in r.schedule)
+    assert schedule_is_valid(client, offer, rules, r)
+    pays = [row.creditor_payment_cents for row in r.schedule if row.creditor_payment_cents]
+    assert sum(pays) == offer_total_cents(offer)
+    assert sum(row.program_fee_cents for row in r.schedule) == program_fee_cents(offer, rules)
 
 
 def test_case2_infeasible_minima():
-    r = _run("case2_infeasible_minima")
+    _client, _offer, _rules, r = _run("case2_infeasible_minima")
     assert r.feasible is False
     af = r.additional_funds
     assert af is not None
@@ -43,16 +49,34 @@ def test_case2_infeasible_minima():
 
 
 def test_case3_requires_balloon():
-    r = _run("case3_balloon")
+    client, offer, rules, r = _run("case3_balloon")
     assert r.feasible is True
     # this creditor allows ballooning; the solver defers payment into a final balloon
     assert r.pay_shape_used == "balloon"
+    assert schedule_is_valid(client, offer, rules, r)
 
 
 def test_case4_tiered_minimums():
-    r = _run("case4_tiers")
+    client, offer, rules, r = _run("case4_tiers")
     assert r.feasible is True
     assert r.pay_shape_used == "staircase"
     # payments 7+ must respect the $50 tier floor
     payments = [row.creditor_payment_cents for row in r.schedule if row.creditor_payment_cents > 0]
     assert all(p >= 5000 for p in payments[6:])
+    assert schedule_is_valid(client, offer, rules, r)
+
+
+def test_non_eom_cadence_does_not_drift_after_february():
+    dates = cadence_through_horizon(date(2026, 1, 30), date(2026, 4, 30))
+    assert dates == [
+        date(2026, 1, 30),
+        date(2026, 2, 28),
+        date(2026, 3, 30),
+        date(2026, 4, 30),
+    ]
+
+@pytest.mark.parametrize("case", ["case1_feasible_even", "case3_balloon", "case4_tiers"])
+def test_feasible_cases_never_schedule_past_horizon(case):
+    client, offer, rules, r = _run(case)
+    assert r.feasible
+    assert all(row.date <= client.last_draft_date for row in r.schedule)
